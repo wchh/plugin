@@ -84,28 +84,25 @@ func (client *Client) newBlock(lastBlock *types.Block, txs []*types.Transaction,
 		return nil, fmt.Errorf("the last block too low")
 	}
 
-	cfg := client.GetAPI().GetConfig()
-	ch := make(chan []*Tx, 1)
-	maxTxs := int(cfg.GetP(height).MaxTxNumber)
-	maxTxs = 1000
-	go func() { ch <- client.RequestTx(maxTxs, nil) }()
-	select {
-	case <-time.After(time.Millisecond * 300):
-	case ts := <-ch:
-		txs = append(txs, ts...)
-	}
-
 	bt := time.Now().Unix()
 	if bt < lastBlock.GetBlockTime() {
 		bt = lastBlock.GetBlockTime()
 	}
-	return &types.Block{
+
+	cfg := client.GetAPI().GetConfig()
+	nb := &types.Block{
 		ParentHash: lastBlock.Hash(cfg),
 		Height:     lastBlock.Height + 1,
-		Txs:        txs,
-		TxHash:     merkle.CalcMerkleRoot(cfg, lastBlock.Height, txs),
 		BlockTime:  bt,
-	}, nil
+	}
+
+	maxTxs := int(cfg.GetP(height).MaxTxNumber)
+	txs = append(txs, client.RequestTx(maxTxs, nil)...)
+	txs = client.AddTxsToBlock(nb, txs)
+
+	nb.Txs = txs
+	nb.TxHash = merkle.CalcMerkleRoot(cfg, lastBlock.Height, txs)
+	return nb, nil
 }
 
 // CheckBlock check block callback
@@ -448,5 +445,14 @@ func (client *Client) sendTx(tx *types.Transaction) error {
 
 // CmpBestBlock 比较newBlock是不是最优区块
 func (client *Client) CmpBestBlock(newBlock *types.Block, cmpBlock *types.Block) bool {
-	return false
+	m1, err := getMiner(newBlock)
+	if err != nil {
+		return false
+	}
+	m2, err := getMiner(cmpBlock)
+	if err != nil {
+		return true
+	}
+
+	return len(m1.Votes) > len(m2.Votes)
 }
